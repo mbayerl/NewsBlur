@@ -6,7 +6,6 @@ services:
     build:
       context: .
       dockerfile: docker/newsblur_base_image.Dockerfile
-    # user: "${CURRENT_UID}:${CURRENT_GID}"
     environment:
       - DOCKERBUILD=True
       - RUNWITHMAKEBUILD=${RUNWITHMAKEBUILD:-True}
@@ -23,17 +22,14 @@ services:
       nofile:
         soft: 10000
         hard: 10000
-    ports:
-      - 8000:8000
-    # only use gunicorn if the TEST env variable is not "True"
     entrypoint: /bin/sh -c newsblur_web/entrypoint.sh
     volumes:
-      - ${PWD}:/srv/newsblur
+      - .:/srv/newsblur
 
   newsblur_node:
     container_name: newsblur_node
     image: newsblur/newsblur_node:latest
-    user: "${CURRENT_UID:-1000}:${CURRENT_GID:-1000}"
+    user: "1000:1000"
     environment:
       - NODE_ENV=docker
       - MONGODB_PORT=29019
@@ -44,21 +40,16 @@ services:
       - newsblur_db_mongo
       - newsblur_db_postgres
       - newsblur_db_redis
-    ports:
-      - 8008:8008
     volumes:
-      - ${PWD}/node:/srv
-      - ${PWD}/node/originals:/srv/originals
+      - ./node:/srv
+      - ./node/originals:/srv/originals
 
   imageproxy:
     container_name: newsblur_imageproxy
-    # image: ghcr.io/willnorris/imageproxy:latest # Enable if you don't need arm64 and want the original imageproxy
-    image: yusukeito/imageproxy:v0.11.2 # Enable if you want arm64
-    user: "${CURRENT_UID:-1000}:${CURRENT_GID:-1000}"
+    image: yusukeito/imageproxy:v0.11.2 
+    user: "1000:1000"
     entrypoint: /app/imageproxy -addr 0.0.0.0:8088 -cache /tmp/imageproxy -verbose
     restart: unless-stopped
-    ports:
-      - 8088:8088
     volumes:
       - /tmp:/tmp/imageproxy
 
@@ -66,8 +57,6 @@ services:
     container_name: newsblur_nginx
     image: nginx:1.19.6
     restart: unless-stopped
-    ports:
-      - 81:81
     depends_on:
       - newsblur_web
       - newsblur_node
@@ -79,7 +68,7 @@ services:
       - DOCKERBUILD=True
     volumes:
       - ./docker/nginx/nginx.local.conf:/etc/nginx/conf.d/nginx.conf
-      - ${PWD}:/srv/newsblur
+      - .:/srv/newsblur
 
   newsblur_db_postgres:
     container_name: newsblur_db_postgres
@@ -88,40 +77,18 @@ services:
     environment:
       - POSTGRES_USER=newsblur
       - POSTGRES_PASSWORD=newsblur
-    # healthcheck:
-    #   test: ["CMD-SHELL", "pg_isready -U newsblur"]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 5
-    ports:
-      - 5434:5432
     volumes:
-      - ./docker/volumes/postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
 
   newsblur_db_redis:
     container_name: newsblur_db_redis
     image: redis:latest
-    ports:
-      - 6579:6579
     restart: unless-stopped
     volumes:
       - ./docker/redis/redis.conf:/etc/redis/redis.conf
       - ./docker/redis/redis_server.conf:/usr/local/etc/redis/redis_replica.conf
-      - ./docker/volumes/redis:/data
+      - redis_data:/data
     command: redis-server /etc/redis/redis.conf --port 6579
-
-  # Prod Redis
-  # db_redis:
-  #   container_name: db_redis
-  #   image: redis:latest
-  #   ports:
-  #     - 6579:6579
-  #   restart: unless-stopped
-  #   volumes:
-  #     - ./docker/redis/redis.conf:/etc/redis/redis.conf
-  #     - ./docker/redis/redis_server.conf:/usr/local/etc/redis/redis_replica.conf
-  #     - ./docker/volumes/redis_prod:/data
-  #   command: redis-server /etc/redis/redis.conf --port 6579
 
   newsblur_db_elasticsearch:
     container_name: newsblur_db_elasticsearch
@@ -137,39 +104,31 @@ services:
       - xpack.security.enabled=false
       - bootstrap.memory_lock=false
       - indices.breaker.total.use_real_memory=false
-    ports:
-      - 9200:9200
-      - 9300:9300
     volumes:
-      - ./docker/volumes/elasticsearch:/usr/share/elasticsearch/data
+      - elasticsearch_data:/usr/share/elasticsearch/data
       - ./config/elasticsearch/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
 
-  # Dejavu is a web UI for Elasticsearch
   dejavu:
     container_name: newsblur_dejavu
     image: appbaseio/dejavu:3.6.0
     restart: unless-stopped
-    ports:
-      - 1358:1358
 
   newsblur_db_mongo:
     container_name: newsblur_db_mongo
     image: mongo:4.0
     restart: unless-stopped
-    ports:
-      - 29019:29019
     command: mongod --port 29019 --wiredTigerEngineConfigString="checkpoint=(wait=60),file_manager=(close_idle_time=0)"
     volumes:
-      - ./docker/volumes/db_mongo:/data/db:delegated
+      - mongo_data:/data/db:delegated
 
   task_celery:
     container_name: newsblur_celery
     image: newsblur/newsblur_python3
-    user: "${CURRENT_UID:-1000}:${CURRENT_GID:-1000}"
+    user: "1000:1000"
     command: "celery worker -A newsblur_web -B --loglevel=INFO"
     restart: unless-stopped
     volumes:
-      - ${PWD}:/srv/newsblur
+      - .:/srv/newsblur
     environment:
       - DOCKERBUILD=True
 
@@ -185,12 +144,12 @@ services:
       - MCP_HOST=0.0.0.0
       - MCP_OAUTH_CLIENT_ID=newsblur-mcp-server
       - MCP_OAUTH_CLIENT_SECRET=newsblur-mcp-dev-secret
-      - MCP_OAUTH_BASE_URL=http://localhost/mcp
-      - MCP_OAUTH_UPSTREAM_URL=http://localhost
+      - MCP_OAUTH_BASE_URL=https://news.mb-serv.de/mcp
+      - MCP_OAUTH_UPSTREAM_URL=https://news.mb-serv.de
       - MCP_OAUTH_INTERNAL_URL=http://newsblur_web:8000
       - MCP_REDIS_URL=redis://newsblur_db_redis:6579/5
     volumes:
-      - ${PWD}/newsblur_mcp/newsblur_mcp:/srv/newsblur_mcp/newsblur_mcp
+      - ./newsblur_mcp/newsblur_mcp:/srv/newsblur_mcp/newsblur_mcp
     depends_on:
       - newsblur_web
 
@@ -203,14 +162,12 @@ services:
       - newsblur_web
       - newsblur_node
       - imageproxy
-      - newsblur_db_redis
-      - newsblur_db_postgres
-      - newsblur_db_elasticsearch
-      - newsblur_db_mongo
-    ports:
-      - 80:80
-      - 443:443
-      - 1936:1936
     volumes:
       - ./docker/haproxy/haproxy.docker-compose.cfg:/usr/local/etc/haproxy/haproxy.cfg
-      - ${PWD}:/srv/newsblur
+      - .:/srv/newsblur
+
+volumes:
+  postgres_data:
+  redis_data:
+  elasticsearch_data:
+  mongo_data:
