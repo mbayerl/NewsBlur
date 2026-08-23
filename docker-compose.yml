@@ -22,7 +22,8 @@ services:
       nofile:
         soft: 10000
         hard: 10000
-    entrypoint: /bin/sh -c newsblur_web/entrypoint.sh
+    # FIX: Absoluter Pfad und direkter Aufruf über bash
+    entrypoint: /bin/bash /srv/newsblur/newsblur_web/entrypoint.sh
     volumes:
       - .:/srv/newsblur
 
@@ -51,7 +52,7 @@ services:
     entrypoint: /app/imageproxy -addr 0.0.0.0:8088 -cache /tmp/imageproxy -verbose
     restart: unless-stopped
     volumes:
-      - /tmp:/tmp/imageproxy
+      - imageproxy_cache:/tmp/imageproxy
 
   nginx:
     container_name: newsblur_nginx
@@ -99,7 +100,6 @@ services:
     environment:
       - discovery.type=single-node
       - "ES_JAVA_OPTS=-Xms384m -Xmx384m"
-      - "CLI_JAVA_OPTS="
       - cluster.routing.allocation.disk.threshold_enabled=false
       - xpack.security.enabled=false
       - bootstrap.memory_lock=false
@@ -130,6 +130,8 @@ services:
       - .:/srv/newsblur
     environment:
       - DOCKERBUILD=True
+    depends_on:
+      - newsblur_web
 
   newsblur_mcp:
     container_name: newsblur_mcp
@@ -170,3 +172,4 @@ volumes:
   redis_data:
   elasticsearch_data:
   mongo_data:
+  imageproxy_cache:
