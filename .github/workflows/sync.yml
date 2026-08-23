@@ -1,0 +1,19 @@
+name: Auto Sync Fork
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Läuft täglich um Mitternacht UTC
+  workflow_dispatch: # Erlaubt es dir, den Sync auch manuell per Button zu starten
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Wichtig, damit der Bot in dein Repo schreiben darf
+    steps:
+      - name: Sync Fork mit Upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ersetze "main" durch den Namen deines Standard-Branches, falls dieser "master" heißt
+          gh repo sync ${{ github.repository }} --branch main
