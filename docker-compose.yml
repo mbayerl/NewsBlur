@@ -22,8 +22,11 @@ services:
       nofile:
         soft: 10000
         hard: 10000
-    # Da kein Ordner mehr gemountet wird, findet er die Datei jetzt!
+    # Das Arbeitsverzeichnis zwingt Docker, Befehle hier auszuführen
+    working_dir: /srv/newsblur
     entrypoint: /bin/sh -c newsblur_web/entrypoint.sh
+    volumes:
+      - .:/srv/newsblur
 
   newsblur_node:
     container_name: newsblur_node
@@ -32,6 +35,7 @@ services:
     environment:
       - NODE_ENV=docker
       - MONGODB_PORT=29019
+    working_dir: /srv
     command: node newsblur.js
     restart: unless-stopped
     stop_signal: HUP
@@ -39,6 +43,9 @@ services:
       - newsblur_db_mongo
       - newsblur_db_postgres
       - newsblur_db_redis
+    volumes:
+      - ./node:/srv
+      - ./node/originals:/srv/originals
 
   imageproxy:
     container_name: newsblur_imageproxy
@@ -56,7 +63,6 @@ services:
       dockerfile_inline: |
         FROM nginx:1.19.6
         COPY docker/nginx/nginx.local.conf /etc/nginx/conf.d/nginx.conf
-        COPY . /srv/newsblur
     restart: unless-stopped
     depends_on:
       - newsblur_web
@@ -67,6 +73,8 @@ services:
       - newsblur_db_elasticsearch
     environment:
       - DOCKERBUILD=True
+    volumes:
+      - .:/srv/newsblur
 
   newsblur_db_postgres:
     container_name: newsblur_db_postgres
@@ -124,18 +132,22 @@ services:
     container_name: newsblur_celery
     image: newsblur/newsblur_python3
     user: "1000:1000"
+    working_dir: /srv/newsblur
     command: "celery worker -A newsblur_web -B --loglevel=INFO"
     restart: unless-stopped
     environment:
       - DOCKERBUILD=True
     depends_on:
       - newsblur_web
+    volumes:
+      - .:/srv/newsblur
 
   newsblur_mcp:
     container_name: newsblur_mcp
     build:
       context: ./newsblur_mcp
     restart: unless-stopped
+    working_dir: /srv/newsblur_mcp
     environment:
       - PYTHONPATH=/srv/newsblur_mcp
       - NEWSBLUR_BASE_URL=http://newsblur_web:8000
@@ -149,6 +161,8 @@ services:
       - MCP_REDIS_URL=redis://newsblur_db_redis:6579/5
     depends_on:
       - newsblur_web
+    volumes:
+      - ./newsblur_mcp/newsblur_mcp:/srv/newsblur_mcp/newsblur_mcp
 
   haproxy:
     container_name: newsblur_haproxy
