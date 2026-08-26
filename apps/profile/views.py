@@ -510,7 +510,17 @@ def paypal_webhooks(request):
         # Kick it over to paypal ipn
         return paypal_standard_ipn(request)
 
-    logging.user(request, f" ---> Paypal webhooks {data.get('event_type', '<no event_type>')} data: {data}")
+    # json.decode hands an empty body straight back, and a well-formed JSON body can
+    # still be a list or a string, so anything but a dict has no webhook to dispatch.
+    if not isinstance(data, dict):
+        logging.user(request, f" ---> Paypal webhooks unparseable body, ignoring: {request.body[:200]}")
+        return HttpResponse("OK")
+
+    if not data.get("event_type"):
+        logging.user(request, f" ---> Paypal webhooks missing event_type, ignoring: {data}")
+        return HttpResponse("OK")
+
+    logging.user(request, f" ---> Paypal webhooks {data['event_type']} data: {data}")
 
     if data["event_type"] == "BILLING.SUBSCRIPTION.CREATED":
         # Don't start a subscription but save it in case the payment comes before the subscription activation
@@ -1614,13 +1624,23 @@ def forgot_password(request):
     if request.method == "POST":
         form = ForgotPasswordForm(request.POST)
         if form.is_valid():
-            logging.user(request.user, "~BC~FRForgot password: ~SB%s" % request.POST["email"])
+            # Use the cleaned email, since the form strips the surrounding whitespace
+            # that the raw POST value still carries. Looking the raw value up instead
+            # misses the account the form just validated.
+            email = form.cleaned_data["email"]
+            logging.user(request.user, "~BC~FRForgot password: ~SB%s" % email)
             try:
-                user = User.objects.get(email__iexact=request.POST["email"])
+                user = User.objects.get(email__iexact=email)
             except User.MultipleObjectsReturned:
-                user = User.objects.filter(email__iexact=request.POST["email"])[0]
-            user.profile.send_forgot_password_email()
-            return HttpResponseRedirect(reverse("index"))
+                user = User.objects.filter(email__iexact=email)[0]
+            except User.DoesNotExist:
+                # The account went away between form validation and this lookup.
+                logging.user(request.user, "~BC~FRFailed forgot password: ~SB%s~SN" % email)
+                form.add_error("email", "No user has that email address.")
+                user = None
+            if user:
+                user.profile.send_forgot_password_email()
+                return HttpResponseRedirect(reverse("index"))
         else:
             logging.user(request.user, "~BC~FRFailed forgot password: ~SB%s~SN" % request.POST.get("email"))
     else:

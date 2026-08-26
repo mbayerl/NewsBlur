@@ -186,6 +186,35 @@ def get_subdomain(request):
         return None
 
 
+def int_or_default(value, default):
+    """
+    Parse an integer request parameter, falling back to the default when it doesn't parse.
+
+    Bots and broken clients regularly mangle querystrings, sending values like
+    page="6&feed_address=https://444.hu/feed&order=newest" or limit="abc". Those are
+    garbage rather than a real request, so silently using the default beats a 500.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def int_feed_ids(feed_ids):
+    """
+    Convert a list of feed id parameters to integers, dropping anything that isn't numeric.
+
+    Same mangled-querystring problem as int_or_default: feed ids arrive as
+    "Entrepreneuriat" or as an entire querystring crammed into one value.
+    """
+    parsed_feed_ids = []
+    for feed_id in feed_ids:
+        parsed_feed_id = int_or_default(feed_id, None)
+        if parsed_feed_id is not None:
+            parsed_feed_ids.append(parsed_feed_id)
+    return parsed_feed_ids
+
+
 def adjust_read_filter_for_date_range(
     read_filter, date_filter_start_utc, date_filter_end_start_utc, unread_cutoff
 ):
@@ -988,8 +1017,14 @@ def refresh_feed(request, feed_id):
     feed = get_object_or_404(Feed, pk=feed_id)
 
     feed = feed.update(force=True, compute_scores=False)
-    usersub = UserSubscription.objects.get(user=user, feed=feed)
-    usersub.calculate_feed_scores(silent=False)
+    try:
+        usersub = UserSubscription.objects.get(user=user, feed=feed)
+    except UserSubscription.DoesNotExist:
+        # An unsubscribed user can still refresh a feed, there are just no scores to
+        # recalculate. load_single_feed below already handles a missing subscription.
+        usersub = None
+    if usersub:
+        usersub.calculate_feed_scores(silent=False)
 
     logging.user(request, "~FBRefreshing feed: %s" % feed)
     MAnalyticsLoader.add(page_load=time.time() - start)
@@ -1082,8 +1117,8 @@ def load_single_feed(request, feed_id):
     # offset                  = int(request.GET.get('offset', 0))
     # limit                   = int(request.GET.get('limit', 6))
     limit = 6
-    page = int(request.GET.get("page", 1))
-    delay = int(request.GET.get("delay", 0))
+    page = int_or_default(request.GET.get("page", 1), 1)
+    delay = int_or_default(request.GET.get("delay", 0), 0)
     offset = limit * (page - 1)
     order = request.GET.get("order", "newest")
     read_filter = request.GET.get("read_filter", "all")
@@ -2425,20 +2460,20 @@ def load_river_stories__redis(request):
     # GET or POST requests, since the parameters for this endpoint can be
     # very long, at which point the max size of a GET url request is exceeded.
     get_post = getattr(request, request.method)
-    limit = int(get_post.get("limit", 12))
+    limit = int_or_default(get_post.get("limit", 12), 12)
     start = time.time()
     user = get_user(request)
     message = None
     feed_ids = get_post.getlist("feeds") or get_post.getlist("feeds[]")
-    feed_ids = [int(feed_id) for feed_id in feed_ids if feed_id]
+    feed_ids = int_feed_ids(feed_ids)
     if not feed_ids:
         feed_ids = get_post.getlist("f") or get_post.getlist("f[]")
-        feed_ids = [int(feed_id) for feed_id in get_post.getlist("f") if feed_id]
+        feed_ids = int_feed_ids(get_post.getlist("f"))
     story_hashes = get_post.getlist("h") or get_post.getlist("h[]")
     story_hashes = story_hashes[:100]
     requested_hashes = len(story_hashes)
     original_feed_ids = list(feed_ids)
-    page = int(get_post.get("page", 1))
+    page = int_or_default(get_post.get("page", 1), 1)
     order = get_post.get("order", "newest")
     read_filter = get_post.get("read_filter", "unread")
     if page > 400 and not story_hashes:
@@ -4414,7 +4449,7 @@ def add_feature(request):
 @json.json_view
 def load_features(request):
     user = get_user(request)
-    page = max(int(request.GET.get("page", 0)), 0)
+    page = max(int_or_default(request.GET.get("page", 0), 0), 0)
     if page > 1:
         logging.user(request, "~FBBrowse features: ~SBPage #%s" % (page + 1))
     features = list(Feature.objects.all()[page * 3 : (page + 1) * 3 + 1].values())
@@ -5090,7 +5125,19 @@ def _mark_story_as_starred(request):
             starred_story.user_tags = user_tags
             starred_story.highlights = highlights
             starred_story.user_notes = user_notes
-            starred_story.save()
+            try:
+                starred_story.save()
+            except NotUniqueError as e:
+                # A double click or a retried request can unsave the story between the
+                # lookup above and this save, which turns the update into an upsert that
+                # collides on the unique user_id/story_guid index.
+                logging.user(
+                    request, "~FCStarring ~FRfailed~FC: ~SB%s (~FM~SB%s~FC~SN)" % (story.story_title[:32], e)
+                )
+                datas.append(
+                    {"code": -1, "message": "Could not save story due to: %s" % e, "story_hash": story_hash}
+                )
+                continue
 
         if len(highlights) == 1 and len(new_highlights) == 1:
             MStarredStoryCounts.adjust_count(request.user.pk, highlights=True, amount=1)
@@ -5179,7 +5226,17 @@ def _mark_story_as_unstarred(request):
             )
             continue
 
-        starred_story = starred_story[0]
+        try:
+            starred_story = starred_story[0]
+        except IndexError:
+            # Two unsaves racing each other (double click, retried request) can delete the
+            # story between the check above and this fetch, leaving an empty cursor.
+            logging.user(request, "~FCUnstarring ~FRfailed~FC: %s not found" % (story_hash))
+            datas.append(
+                {"code": -1, "message": "Could not unsave story, not found", "story_hash": story_hash}
+            )
+            continue
+
         logging.user(request, "~FCUnstarring: ~SB%s" % (starred_story.story_title[:50]))
         user_tags = starred_story.user_tags
         feed_id = starred_story.story_feed_id
@@ -5452,9 +5509,14 @@ def remove_dashboard_river(request):
 
 
 def print_story(request):
-    story_hash = request.GET["story_hash"]
+    story_hash = request.GET.get("story_hash")
+    if not story_hash:
+        raise Http404
     text_view = request.GET.get("text", False)
-    timezone = request.user.profile.timezone
+    # apps/reader/views.py: get_user falls back to the homepage user, so logged out
+    # readers hitting a print link still get a sane timezone instead of an AttributeError.
+    user = get_user(request)
+    timezone = user.profile.timezone
     try:
         story = MStory.objects.get(story_hash=story_hash)
     except MStory.DoesNotExist:
