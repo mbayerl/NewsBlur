@@ -17,7 +17,7 @@ from django.utils.encoding import smart_str
 
 from apps.profile.models import Profile
 from apps.reader.models import UserSubscription
-from apps.rss_feeds.models import Feed, MFeedIcon, MStory
+from apps.rss_feeds.models import MAX_STORY_CONTENT_BYTES, Feed, MFeedIcon, MStory
 from apps.rss_feeds.tasks import SchedulePremiumSetup
 from utils import json_functions as json
 from utils.feed_functions import (
@@ -1525,24 +1525,49 @@ class Test_StoryImageInjection(TestCase):
     @patch("mongoengine.Document.save")
     @patch.object(MStory, "sync_redis")
     @patch.object(MStory, "extract_image_urls")
-    def test_save_truncates_story_content_to_ten_megabytes(
+    def test_save_truncates_story_content_to_the_size_cap(
         self, mock_extract_images, mock_sync_redis, mock_document_save
     ):
-        max_content_bytes = 10 * 1024 * 1024
         story = MStory(
             story_feed_id=1,
             story_guid="oversized-story-content",
             story_title="Oversized story",
             story_permalink="https://example.com/oversized",
             story_date=datetime.datetime.utcnow(),
-            story_content="a" * (max_content_bytes - 1) + "éé",
+            story_content="a" * (MAX_STORY_CONTENT_BYTES - 1) + "éé",
         )
 
         story.save()
 
         content = story.story_content_str
-        self.assertLessEqual(len(content.encode("utf-8")), max_content_bytes)
+        self.assertLessEqual(len(content.encode("utf-8")), MAX_STORY_CONTENT_BYTES)
         self.assertTrue(content.endswith("é"))
+
+    @patch("mongoengine.Document.save")
+    @patch.object(MStory, "sync_redis")
+    @patch.object(MStory, "extract_image_urls")
+    def test_save_truncates_an_oversized_original_page(
+        self, mock_extract_images, mock_sync_redis, mock_document_save
+    ):
+        # An original page arrives already compressed from PageImporter, so the cap has
+        # to unpack it to catch a page that stays over the limit even compressed.
+        oversized_page = "<p>%s</p>" % ("random content 0123456789 " * 200000)
+        story = MStory(
+            story_feed_id=1,
+            story_guid="oversized-original-page",
+            story_title="Oversized page",
+            story_permalink="https://example.com/oversized-page",
+            story_date=datetime.datetime.utcnow(),
+        )
+        story.original_page_z = zlib.compress(oversized_page.encode("utf-8"), 0)
+
+        self.assertGreater(len(story.original_page_z), MAX_STORY_CONTENT_BYTES)
+
+        story.save()
+
+        page = zlib.decompress(story.original_page_z)
+        self.assertLessEqual(len(page), MAX_STORY_CONTENT_BYTES)
+        self.assertTrue(page.startswith(b"<p>random content"))
 
     def test_prepend_image_replaces_previously_prepended_image(self):
         story = MStory(
@@ -1624,6 +1649,40 @@ class Test_PreProcessStoryContentSelection(TestCase):
         out = pre_process_story(entry, fp.encoding)
         self.assertIn("Real article body.", out["story_content"])
         self.assertGreater(len(out["story_content"]), 1000)
+
+    def test_adds_media_content_image_without_declared_type(self):
+        # apps/rss_feeds/test_rss_feeds.py: mirrors the Le Figaro RSS shape where
+        # media:content has a URL plus dimensions, but no type or medium attribute.
+        from utils.story_functions import pre_process_story
+
+        image_url = "https://i.f1g.fr/media/cms/orig/2026/08/26/photo.JPG"
+        xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:media="http://search.yahoo.com/mrss/" version="2.0">
+  <channel>
+    <title>Test Feed</title>
+    <link>https://example.com/</link>
+    <description>Test</description>
+    <item>
+      <title>Story with untyped media content</title>
+      <description>Short article summary.</description>
+      <link>https://example.com/story/</link>
+      <guid>story-1</guid>
+      <pubDate>Wed, 26 Aug 2026 07:28:46 +0200</pubDate>
+      <media:content url="{image_url}" width="3000" height="2000">
+        <media:description type="plain">Caption</media:description>
+      </media:content>
+    </item>
+  </channel>
+</rss>
+"""
+        fp, entry = self._parse_first_entry(xml)
+        media_content = entry.get("media_content")[0]
+        self.assertEqual(media_content.get("url"), image_url)
+        self.assertIsNone(media_content.get("type"))
+        self.assertIsNone(media_content.get("medium"))
+
+        out = pre_process_story(entry, fp.encoding)
+        self.assertIn(f'<img src="{image_url}" />', out["story_content"])
 
 
 class Test_IconImporter(TestCase):

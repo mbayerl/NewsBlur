@@ -2365,6 +2365,13 @@
                     _.delay(function () {
                         story.set('selected', true);
                     }, 100);
+                } else if (data.is_preview) {
+                    // reader.js: The linked story is beyond the 3-story preview that
+                    // non-archive users receive, so there's nothing to select. Show
+                    // the Premium Archive upgrade instead of silently doing nothing.
+                    _.delay(function () {
+                        NEWSBLUR.reader.open_premium_upgrade_modal({ highlight_feature: 'briefing' });
+                    }, 100);
                 }
             }
         },
@@ -2997,7 +3004,7 @@
 
             // Check if user has archive access (Premium Archive tier)
             if (!NEWSBLUR.Globals.is_archive) {
-                this.open_feedchooser_modal({ premium_only: true });
+                this.open_premium_upgrade_modal({ highlight_feature: 'ask-ai' });
                 return;
             }
 
@@ -4128,8 +4135,8 @@
             NEWSBLUR.recommend_feed = new NEWSBLUR.ReaderRecommendFeed(feed_id);
         },
 
-        open_tutorial_modal: function () {
-            NEWSBLUR.tutorial = new NEWSBLUR.ReaderTutorial();
+        open_features_modal: function (options) {
+            NEWSBLUR.features = new NEWSBLUR.ReaderFeatures(options);
         },
 
         open_intro_modal: function (options) {
@@ -4843,9 +4850,9 @@
                         $.make('div', { className: 'NB-menu-manage-image' }),
                         $.make('div', { className: 'NB-menu-manage-title' }, 'Keyboard shortcuts')
                     ]),
-                    $.make('li', { className: 'NB-menu-item NB-menu-manage-tutorial', role: "button" }, [
+                    $.make('li', { className: 'NB-menu-item NB-menu-manage-features', role: "button" }, [
                         $.make('div', { className: 'NB-menu-manage-image' }),
-                        $.make('div', { className: 'NB-menu-manage-title' }, 'Tips &amp; Tricks')
+                        $.make('div', { className: 'NB-menu-manage-title' }, 'Features &amp; Tips')
                     ]),
                     $.make('li', { className: 'NB-menu-item NB-menu-manage-goodies', role: "button" }, [
                         $.make('div', { className: 'NB-menu-manage-image' }),
@@ -8414,11 +8421,11 @@
                     });
                 }
             });
-            $.targetIs(e, { tagSelector: '.NB-menu-manage-tutorial' }, function ($t, $p) {
+            $.targetIs(e, { tagSelector: '.NB-menu-manage-features' }, function ($t, $p) {
                 e.preventDefault();
                 if (!$t.hasClass('NB-disabled')) {
                     $.modal.close(function () {
-                        self.open_tutorial_modal();
+                        self.open_features_modal();
                     });
                 }
             });
@@ -8931,7 +8938,7 @@
             $.targetIs(e, { tagSelector: '.NB-module-launch-tutorial' }, function ($t, $p) {
                 e.preventDefault();
                 if (!$t.hasClass('NB-disabled')) {
-                    self.open_tutorial_modal();
+                    self.open_features_modal();
                 }
             });
             $.targetIs(e, { tagSelector: '.NB-module-launch-intro' }, function ($t, $p) {
@@ -8943,7 +8950,10 @@
             $.targetIs(e, { tagSelector: '.NB-module-premium-button' }, function ($t, $p) {
                 e.preventDefault();
                 if (!$t.hasClass('NB-disabled')) {
-                    self.open_premium_upgrade_modal();
+                    // reader.js: The "Reason to upgrade" module button carries the
+                    // feature slug for its rotating reason, so the upgrade modal
+                    // highlights the matching archive tier line.
+                    self.open_premium_upgrade_modal({ highlight_feature: $t.data('highlight-feature') });
                 }
             });
             $.targetIs(e, { tagSelector: '.NB-module-trial-offer-button' }, function ($t, $p) {

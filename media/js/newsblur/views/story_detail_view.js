@@ -697,7 +697,7 @@ NEWSBLUR.Views.StoryDetailView = Backbone.View.extend({
     open_clustering_upgrade: function (e) {
         e.preventDefault();
         e.stopPropagation();
-        NEWSBLUR.reader.open_premium_upgrade_modal();
+        NEWSBLUR.reader.open_premium_upgrade_modal({ highlight_feature: 'clustering' });
     },
 
     show_clustering_tooltip: function (e) {
@@ -1215,6 +1215,13 @@ NEWSBLUR.Views.StoryDetailView = Backbone.View.extend({
                     story.set('selected', true);
                     return false;
                 }
+            }
+            // story_detail_view.js: Non-archive users only receive the first 3 curated
+            // stories per briefing, so the rest of the briefing's links have no story
+            // to select. Show the Premium Archive upgrade instead of a dead new tab.
+            if (NEWSBLUR.utils.is_briefing_preview()) {
+                NEWSBLUR.reader.open_premium_upgrade_modal({ highlight_feature: 'briefing' });
+                return false;
             }
         }
 
@@ -2131,7 +2138,7 @@ NEWSBLUR.Views.StoryDetailView = Backbone.View.extend({
                             </div>\
                         </div>\
                         <input type="text" class="NB-menu-ask-ai-custom-input" placeholder="Ask a question..." />\
-                        <div class="NB-menu-ask-ai-submit-menu NB-disabled" data-model="opus">\
+                        <div class="NB-menu-ask-ai-submit-menu NB-disabled" data-model="anthropic">\
                             <div class="NB-menu-ask-ai-custom-submit">Ask</div>\
                             <div class="NB-menu-ask-ai-submit-dropdown-trigger" title="Choose model">\
                                 <span class="NB-dropdown-arrow">▾</span>\
@@ -2175,8 +2182,17 @@ NEWSBLUR.Views.StoryDetailView = Backbone.View.extend({
         '</div>';
         $menu.find('.NB-menu-ask-ai-model-dropdown').html(dropdown_html);
 
-        // Set model from preference (default to opus)
-        var saved_model = NEWSBLUR.assets.preference('ask_ai_model') || 'opus';
+        // Set model from preference (default to the server's default model key).
+        // Legacy keys from before keys became vendor slugs (Aug 2026) still
+        // live in saved preferences — map them to their vendor key.
+        var legacy_model_keys = {
+            'opus': 'anthropic', 'haiku': 'anthropic',
+            'gpt-5.2': 'openai', 'gpt-5-mini': 'openai',
+            'gemini-3': 'google', 'gemini-flash-lite': 'google',
+            'grok-4.1': 'xai', 'grok-4.1-fast': 'xai'
+        };
+        var saved_model = NEWSBLUR.assets.preference('ask_ai_model') || 'anthropic';
+        saved_model = legacy_model_keys[saved_model] || saved_model;
         var $submit_menu = $menu.find('.NB-menu-ask-ai-submit-menu');
         $submit_menu.data('model', saved_model);
         $menu.find('.NB-menu-ask-ai-model-dropdown .NB-model-option').removeClass('NB-selected');

@@ -26,7 +26,9 @@ NEWSBLUR.Views.StoryTitlesView = Backbone.View.extend({
     events: {
         "click .NB-feed-story-premium-only a": function (e) {
             e.preventDefault();
-            NEWSBLUR.reader.open_premium_upgrade_modal();
+            // story_titles_view.js: The notice link's data-feature names the tier
+            // line to highlight (river, saved-tags, or search).
+            NEWSBLUR.reader.open_premium_upgrade_modal({ highlight_feature: $(e.currentTarget).data('feature') });
         },
         "click .NB-briefing-generate-btn": function (e) {
             e.preventDefault();
@@ -167,6 +169,17 @@ NEWSBLUR.Views.StoryTitlesView = Backbone.View.extend({
 
         $groups = this._render_briefing_groups(briefings, data);
 
+        // story_titles_view.js: Banner for non-archive users explaining that briefings
+        // are preview-only on their plan — no schedule, and only the first few stories
+        // of each briefing are unlocked.
+        if (data.is_preview) {
+            $groups.unshift(NEWSBLUR.utils.make_archive_callout(
+                "You're previewing the first 3 stories of each briefing. " +
+                "Upgrade to unlock every story and automatic briefings on your schedule.",
+                { highlight_feature: 'briefing' }
+            ));
+        }
+
         if (!briefings.length) {
             var $empty = $.make('div', { className: 'NB-briefing-empty' }, [
                 $.make('div', { className: 'NB-briefing-empty-icon' }),
@@ -263,7 +276,6 @@ NEWSBLUR.Views.StoryTitlesView = Backbone.View.extend({
         var $groups = [];
         var group_index = 0;
         _.each(briefings, function (briefing) {
-            briefing.is_preview = data.is_preview;
             var display_briefing = briefing;
             if (active_section) {
                 var section_hashes = (briefing.curated_sections || {})[active_section] || [];
@@ -446,13 +458,13 @@ NEWSBLUR.Views.StoryTitlesView = Backbone.View.extend({
     append_river_premium_only_notification: function () {
         var message = [
             'The full River of News is a ',
-            $.make('a', { href: '#', className: 'NB-splash-link' }, 'premium feature'),
+            $.make('a', { href: '#', className: 'NB-splash-link', 'data-feature': 'river' }, 'premium feature'),
             '.'
         ];
         if (NEWSBLUR.reader.flags['starred_view']) {
             message = [
                 'Reading saved stories by tag is a ',
-                $.make('a', { href: '#', className: 'NB-splash-link' }, 'premium feature'),
+                $.make('a', { href: '#', className: 'NB-splash-link', 'data-feature': 'saved-tags' }, 'premium feature'),
                 '.'
             ];
         }
@@ -474,7 +486,7 @@ NEWSBLUR.Views.StoryTitlesView = Backbone.View.extend({
         var $notice = $.make('div', { className: 'NB-feed-story-premium-only' }, [
             $.make('div', { className: 'NB-feed-story-premium-only-text' }, [
                 'Search is a ',
-                $.make('a', { href: '#', className: 'NB-splash-link' }, 'premium feature'),
+                $.make('a', { href: '#', className: 'NB-splash-link', 'data-feature': 'search' }, 'premium feature'),
                 '.'
             ])
         ]);
